@@ -1,0 +1,69 @@
+# 第一阶段只登记已经实测过的来源；分类清单需通过真实页面侦察补全。
+
+[ccgp_jiangsu]
+display_name = "江苏政府采购网"
+http_base_url = "http://www.ccgp-jiangsu.gov.cn"
+https_base_url = "https://www.ccgp-jiangsu.gov.cn"
+search_path = "/jiangsu/cggg_search.html"
+category_query_key = "gglb"
+list_api_path = "/pss/jsp/search_cggg.jsp"
+area_api_path = "/pss/jsp/getNewArea.jsp"
+area_api_method = "POST"
+area_api_pid = "32"
+captcha_path = "/pss/servlet/validateCodeServlet"
+known_announcement_types = [
+    "cgyx", "dyly", "zgys", "cggg", "zjgg", "rwjg", "zbgg", "cjgg",
+    "zzgg", "gzgg", "htgg", "cjhz", "qtgg", "fbgg", "ysgg"
+]
+procurement_methods = [
+    "cgfs001", "cgfs002", "cgfs003", "cgfs004", "cgfs005",
+    "cgfs008", "cgfs010", "cgfs009"
+]
+request_timeout_seconds = 30
+# 官网出现过 IP 限流页；以下是保守起步值，不代表站方承诺的安全阈值。
+min_request_interval_seconds = 10
+request_jitter_seconds = 5
+cooldown_seconds = 3600
+incremental_window_hours = 24
+max_pages_per_run = 10
+max_records_per_run = 100
+scheduled_runs_per_day = 7
+captcha_required_for_list_api = true
+captcha_mode = "human_once_per_query"
+max_transient_retries = 1
+max_overlimit_retries = 0
+
+[sucaiyun]
+display_name = "苏采云政府采购交易系统"
+base_url = "https://jszfcg.jsczt.cn"
+mode = "public_metadata_only"
+ca_required_for_private_attachments = true
+
+[okcis_taixing]
+display_name = "泰兴招标网（招标采购导航网聚合站）"
+base_url = "https://taixingshi.okcis.cn"
+list_path = "/sww/bn/"
+robots_path = "/robots.txt"
+role = "discovery_only"
+official_source = false
+list_is_static_html = true
+detail_requires_captcha = true
+budget_from_list_status = "UNKNOWN_unlabeled_hint_only"
+min_request_interval_seconds = 15
+request_jitter_seconds = 5
+max_pages_per_run = 2
+
+[okcis_jiangsu]
+display_name = "江苏招标网（OKCIS 省级聚合入口）"
+base_url = "https://jiangsu.okcis.cn"
+list_path = "/sww/bn/"
+robots_path = "/robots.txt"
+role = "discovery_only"
+official_source = false
+scope = "江苏省"
+list_is_static_html = true
+detail_requires_captcha = true
+budget_from_list_status = "UNKNOWN_unlabeled_hint_only"
+min_request_interval_seconds = 15
+request_jitter_seconds = 5
+max_pages_per_run = 2

@@ -1,0 +1,16 @@
+"""公告跟进状态常量。"""
+
+from __future__ import annotations
+
+FOLLOW_UP_STATUSES = ("UNTRACKED", "PENDING", "IN_PROGRESS", "DONE", "NOT_REQUIRED")
+EDITABLE_FOLLOW_UP_STATUSES = frozenset(FOLLOW_UP_STATUSES[1:])
+ACTIVE_FOLLOW_UP_STATUSES = frozenset(("PENDING", "IN_PROGRESS"))
+COMPLETED_FOLLOW_UP_STATUSES = frozenset(("DONE", "NOT_REQUIRED"))
+ACTIONABLE_FILTER_STATUSES = frozenset(("MATCH", "OVER_BUDGET", "REVIEW"))
+FOLLOW_UP_LABELS = {
+    "UNTRACKED": "未设置",
+    "PENDING": "待跟进",
+    "IN_PROGRESS": "跟进中",
+    "DONE": "已完成",
+    "NOT_REQUIRED": "暂不跟进",
+}
