@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -37,6 +39,33 @@ from .sources.ccgp_jiangsu_detail import parse_detail_payload
 from .sources.okcis_jiangsu import JIANGSU_SOURCE
 from .sources.okcis_taixing import OkcisListError, collect_list_pages
 from .storage import TenderDatabase
+
+_FETCH_RETRY_DELAYS = (15.0, 30.0)
+_TRANSIENT_FETCH_ERRORS = (
+    httpx.NetworkError,
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+)
+
+
+def _fetch_page_with_retries(
+    fetch_page: Callable[[str], tuple[int, str]],
+    url: str,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    retry_delays: tuple[float, ...] = _FETCH_RETRY_DELAYS,
+) -> tuple[int, str]:
+    """对瞬时传输错误做有限退避重试，429/验证码仍由上层立即熔断。"""
+
+    for retry_delay in (*retry_delays, None):
+        try:
+            return fetch_page(url)
+        except _TRANSIENT_FETCH_ERRORS:
+            if retry_delay is None:
+                raise
+            # 默认退避不低于 OKCIS 的最小请求间隔，避免重试放大限流。
+            sleep(retry_delay)
+    raise AssertionError("unreachable")
 
 
 def _date_range_ms(start_date: str | None, end_date: str | None) -> tuple[int, int]:
@@ -534,9 +563,19 @@ def main() -> None:
                 "User-Agent": "JiangsuTenderMonitor/0.1 (local research)",
             },
         ) as client:
-            def fetch_page(url: str) -> tuple[int, str]:
+            def fetch_page_once(url: str) -> tuple[int, str]:
                 response = client.get(url)
                 return response.status_code, response.text
+
+            def fetch_page(url: str) -> tuple[int, str]:
+                return _fetch_page_with_retries(
+                    fetch_page_once,
+                    url,
+                    retry_delays=(
+                        OKCIS_RATE_LIMIT_POLICY.min_request_interval_seconds,
+                        OKCIS_RATE_LIMIT_POLICY.min_request_interval_seconds * 2,
+                    ),
+                )
 
             with TenderDatabase(args.db) as db:
                 result = collect_list_pages(
@@ -584,9 +623,19 @@ def main() -> None:
                 "User-Agent": "JiangsuTenderMonitor/0.1 (local research)",
             },
         ) as client:
-            def fetch_page(url: str) -> tuple[int, str]:
+            def fetch_page_once(url: str) -> tuple[int, str]:
                 response = client.get(url)
                 return response.status_code, response.text
+
+            def fetch_page(url: str) -> tuple[int, str]:
+                return _fetch_page_with_retries(
+                    fetch_page_once,
+                    url,
+                    retry_delays=(
+                        OKCIS_RATE_LIMIT_POLICY.min_request_interval_seconds,
+                        OKCIS_RATE_LIMIT_POLICY.min_request_interval_seconds * 2,
+                    ),
+                )
 
             source = JIANGSU_SOURCE if args.scope == "jiangsu" else None
             source_name = source.name if source else "okcis_taixing"

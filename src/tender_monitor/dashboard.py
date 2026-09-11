@@ -336,9 +336,10 @@ footer{padding:22px 0 64px;border-top:1px solid var(--rule);margin-top:28px;colo
 footer .note{margin-top:14px;max-width:900px}
 footer code{font-family:var(--font-code);font-size:11px;background:var(--card2);padding:1px 6px;border-radius:3px}
 /* dossier (assay panel) */
-.backdrop{position:fixed;inset:0;background:oklch(20% 0.02 55 / .42);z-index:60;opacity:1;transition:opacity .2s var(--ease-out)}
+.backdrop{position:fixed;inset:0;background:oklch(20% 0.02 55 / .42);z-index:210;opacity:1;transition:opacity .2s var(--ease-out)}
 .backdrop.hidden{opacity:0;pointer-events:none}
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(530px,94vw);background:var(--card);border-left:1px solid var(--rule2);z-index:70;transform:translateX(105%);transition:transform .26s var(--ease-out);display:flex;flex-direction:column;box-shadow:var(--shadow-panel)}
+/* 抽屉是模态层，必须盖过 sticky 顶栏（z-index:200），否则标题会被顶栏覆盖。 */
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(530px,94vw);background:var(--card);border-left:1px solid var(--rule2);z-index:220;transform:translateX(105%);transition:transform .26s var(--ease-out);display:flex;flex-direction:column;box-shadow:var(--shadow-panel)}
 .drawer.open{transform:none}
 .d-body{overflow-y:auto;padding:26px 30px 34px}
 .d-k{font:10px/1 var(--font-data);letter-spacing:.15em;color:var(--acc);text-transform:uppercase}

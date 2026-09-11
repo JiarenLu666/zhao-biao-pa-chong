@@ -106,6 +106,16 @@ py -3 -m venv .venv
 
 该命令创建 SQLite、`data/raw`、`data/attachments` 和 `data/evidence`，不会覆盖已有数据库。
 
+新电脑从 GitHub 克隆后没有历史公告是正常的。项目不会把 `data/tenders.sqlite3`、报告、快照和证据提交到仓库；请先初始化并采集：
+
+```bash
+.venv/bin/python -m tender_monitor.cli setup --db data/tenders.sqlite3
+.venv/bin/python -m tender_monitor.cli auto-refresh \
+  --db data/tenders.sqlite3 --scope jiangsu
+```
+
+如果需要迁移原电脑的历史数据，请通过 AirDrop、U 盘或受信任的私有文件传输复制 `tenders.sqlite3`，放到新电脑的 `data/` 或运行副本 `data/` 目录，再用同一数据库路径启动 Dashboard。不要把包含人工核验和跟进记录的实时数据库提交到公共 GitHub。
+
 ## 6. 自动采集
 
 ### 手动执行一次
@@ -129,7 +139,7 @@ py -3 -m venv .venv
 - `--page-size 50`：每页最多 50 条。
 - `--time-type 1`：站点的“最新”范围。
 
-自动任务每次最多 2 页/100 条；请求之间至少 15 秒并加 0–5 秒抖动。401、429、`overLimitIP` 或“访问过于频繁”会熔断 1 小时，不自动重试。
+自动任务每次最多 2 页/100 条；请求之间至少 15 秒并加 0–5 秒抖动。DNS、连接超时或 TLS/传输层瞬断会在不低于该间隔的前提下最多重试 2 次（等待 15 秒、30 秒）；401、429、`overLimitIP` 或“访问过于频繁”会熔断 1 小时，绝不重试。
 
 输出文件：
 
@@ -370,7 +380,7 @@ Dashboard 功能：
 
 ### 本地人工处理事件
 
-遇到验证码、限流、DNS/网络错误或其他自动采集失败时写入 `data/attention.json`。Dashboard 会轮询事件并显示备用提示；程序同时尝试系统原生通知。同一未处理事件只通知一次，标记已处理后才会清除。
+遇到验证码、限流、DNS/网络错误或其他自动采集失败时写入 `data/attention.json`。Dashboard 会轮询事件并显示备用提示；程序同时尝试系统原生通知。同一未处理事件只通知一次；同一来源的网络/限流错误在后续采集成功后会自动标记已恢复并清除，验证码或人工操作提示仍需点击“标记已处理”。
 
 ### Server酱 Turbo
 
@@ -416,7 +426,7 @@ export PUSHPLUS_CHANNEL='wechat'
 
 排除关键词包括工程、施工、建筑、监理、检测、实验室、维保、流标、废标、终止等。摄影、拍摄、图片、影像标题豁免宽泛的“设备采购”排除。
 
-OKCIS 默认至少 15 秒间隔 + 0–5 秒抖动，单次最多 2 页/100 条；401、429、限流页进入 1 小时冷却，不自动重试；锁文件防止并行循环。
+OKCIS 默认至少 15 秒间隔 + 0–5 秒抖动，单次最多 2 页/100 条；DNS/超时/TLS 瞬断最多按 15 秒、30 秒退避重试 2 次，401、429、限流页进入 1 小时冷却且不重试；锁文件防止并行循环。
 
 ## 16. 常见问题
 

@@ -1,11 +1,36 @@
 import csv
 
+import httpx
 import pytest
 
+from tender_monitor.attention import read_attention, write_attention
 from tender_monitor.automation import CycleAlreadyRunningError, run_automatic_cycle
+from tender_monitor.cli import _fetch_page_with_retries
 from tender_monitor.rate_limit import RateLimitPolicy, RequestGuard
 from tender_monitor.sources.okcis_taixing import build_list_url
 from tender_monitor.storage import TenderDatabase
+
+
+def test_fetch_page_retries_transient_transport_error_with_bounded_backoff():
+    attempts = 0
+    delays: list[float] = []
+
+    def fetch_page(_: str) -> tuple[int, str]:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise httpx.ConnectError("temporary DNS/TLS failure")
+        return 200, "ok"
+
+    result = _fetch_page_with_retries(
+        fetch_page,
+        "https://example.invalid/page",
+        sleep=delays.append,
+    )
+
+    assert result == (200, "ok")
+    assert attempts == 3
+    assert delays == [15.0, 30.0]
 
 
 def _page_html(title: str, href: str, page: int) -> str:
@@ -21,6 +46,54 @@ def _page_html(title: str, href: str, page: int) -> str:
     <input id="countnum_pagesize" value="2" />
     <input id="countnum_size" value="50" />
     """
+
+
+def test_automatic_cycle_clears_recovered_network_attention(tmp_path):
+    db_path = tmp_path / "data" / "tenders.sqlite3"
+    attention_path = db_path.parent / "attention.json"
+    write_attention(
+        attention_path,
+        kind="AUTOMATION_FAILED",
+        message="网络请求失败：临时连接中断",
+        source="okcis_taixing",
+        url="https://taixingshi.okcis.cn",
+        notify=False,
+    )
+
+    run_automatic_cycle(
+        lambda _: (200, _page_html("视频拍摄服务公告", "/dnww1.html", 1)),
+        db_path=db_path,
+        pages=1,
+        sleep=lambda _: None,
+        snapshot_dir=None,
+    )
+
+    assert read_attention(attention_path) is None
+
+
+def test_automatic_cycle_keeps_manual_attention_after_network_recovery(tmp_path):
+    db_path = tmp_path / "data" / "tenders.sqlite3"
+    attention_path = db_path.parent / "attention.json"
+    write_attention(
+        attention_path,
+        kind="CAPTCHA_REQUIRED",
+        message="请人工填写验证码",
+        source="ccgp_jiangsu",
+        url="http://www.ccgp-jiangsu.gov.cn/jiangsu/cggg_search.html",
+        notify=False,
+    )
+
+    run_automatic_cycle(
+        lambda _: (200, _page_html("视频拍摄服务公告", "/dnww1.html", 1)),
+        db_path=db_path,
+        pages=1,
+        sleep=lambda _: None,
+        snapshot_dir=None,
+    )
+
+    event = read_attention(attention_path)
+    assert event is not None
+    assert event["kind"] == "CAPTCHA_REQUIRED"
 
 
 def test_automatic_cycle_is_idempotent_and_refreshes_outputs(tmp_path):

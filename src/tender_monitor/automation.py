@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .attention import clear_recovered_attention
 from .rate_limit import RequestGuard
 from .report import refresh_outputs
 from .sources.okcis_taixing import (
@@ -158,6 +159,10 @@ def run_automatic_cycle(
             digest_output=digest_path,
             review_output=review_path,
             max_items=max_items,
+        )
+        clear_recovered_attention(
+            database_path.parent / "attention.json",
+            source=source_name,
         )
 
     return AutomaticCycleResult(

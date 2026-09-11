@@ -18,6 +18,7 @@ ATTENTION_TITLES = {
     "MANUAL_ACTION_REQUIRED": "需要人工处理",
     "AUTOMATION_FAILED": "自动采集需要处理",
 }
+RECOVERABLE_ATTENTION_KINDS = frozenset({"AUTOMATION_FAILED", "RATE_LIMIT"})
 
 
 def _escape_applescript(value: str) -> str:
@@ -160,3 +161,15 @@ def clear_attention(path: str | Path) -> None:
     current["status"] = "CLEARED"
     current["cleared_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     attention_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def clear_recovered_attention(path: str | Path, *, source: str) -> bool:
+    """自动循环成功后清除同来源的网络/限流提示，保留人工提示。"""
+
+    current = read_attention(path)
+    if not current:
+        return False
+    if current.get("source") != source or current.get("kind") not in RECOVERABLE_ATTENTION_KINDS:
+        return False
+    clear_attention(path)
+    return True

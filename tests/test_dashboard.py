@@ -144,6 +144,25 @@ def test_dashboard_save_action_is_named_and_styled_as_save():
     assert "保存跟进" not in html
 
 
+def test_detail_drawer_layers_above_sticky_header():
+    """打开详情时，抽屉和遮罩不能被全局 sticky 顶栏盖住。"""
+
+    html = render_dashboard_html()
+    style = re.search(r"<style>(.*?)</style>", html, re.DOTALL)
+    assert style is not None
+
+    def z_index(selector):
+        match = re.search(rf"{re.escape(selector)}\{{[^}}]*z-index:(\d+)", style.group(1))
+        assert match is not None, f"缺少 {selector} 的 z-index"
+        return int(match.group(1))
+
+    header_z = z_index("header")
+    backdrop_z = z_index(".backdrop")
+    drawer_z = z_index(".drawer")
+    assert backdrop_z > header_z
+    assert drawer_z > backdrop_z
+
+
 def test_auto_refresh_launch_agent_invokes_shell_explicitly():
     plist_path = Path(__file__).parents[1] / "scripts" / "com.jiangsu.tender-monitor.auto-refresh.plist"
     payload = plistlib.loads(plist_path.read_bytes())
