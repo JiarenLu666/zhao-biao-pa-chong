@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -447,6 +447,8 @@ class TenderDatabase:
 
         去重键使用稳定的 tender id，而不是摘要文本或 ``updated_at``；这样
         同一公告被重复抓取、重新分类或人工核验时，不会反复打扰用户。
+        口径与 ``notifications.actionable_rows`` 一致：无论是否已核验，
+        只要跟进状态为 DONE 或 NOT_REQUIRED 就不再推送。
         """
 
         normalized_channel = channel.strip().lower()
@@ -456,10 +458,7 @@ class TenderDatabase:
         return connection.execute(
             """SELECT t.* FROM tenders AS t
                WHERE t.filter_status IN ('MATCH', 'OVER_BUDGET', 'REVIEW')
-                 AND NOT (
-                   t.verification_status = 'VERIFIED'
-                   AND t.follow_up_status IN ('DONE', 'NOT_REQUIRED')
-                 )
+                 AND t.follow_up_status NOT IN ('DONE', 'NOT_REQUIRED')
                  AND NOT EXISTS (
                    SELECT 1 FROM notification_deliveries AS n
                    WHERE n.tender_id = t.id AND n.channel = ?
@@ -491,6 +490,34 @@ class TenderDatabase:
         )
         connection.commit()
         return connection.total_changes - before
+
+    def purge_tenders_older_than(
+        self,
+        retention_days: int,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """删除发布时间早于保留期的公告，返回删除条数。
+
+        以公告发布日（缺失时回退到入库日）与保留截止日（按自然日）比较。
+        ``attachments`` 和 ``notification_deliveries`` 依赖外键
+        ``ON DELETE CASCADE`` 一并删除（连接已启用
+        ``PRAGMA foreign_keys = ON``）。
+        """
+
+        if retention_days <= 0:
+            raise ValueError("retention_days 必须大于 0")
+        reference = now or datetime.now(timezone.utc)
+        cutoff_date = (reference - timedelta(days=retention_days)).date().isoformat()
+        connection = self.connect()
+        cursor = connection.execute(
+            """DELETE FROM tenders
+               WHERE COALESCE(substr(published_at, 1, 10), substr(created_at, 1, 10), '')
+                     < ?""",
+            (cutoff_date,),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
 
     def upsert_attachments(
         self,

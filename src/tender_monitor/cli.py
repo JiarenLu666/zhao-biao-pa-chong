@@ -15,16 +15,31 @@ import httpx
 
 from . import __version__
 from .attention import write_attention
-from .automation import CycleAlreadyRunningError, run_automatic_cycle
+from .automation import (
+    CycleAlreadyRunningError,
+    run_automatic_cycle,
+    run_okcis_cycle,
+)
+from .cleanup import purge_snapshot_files
 from .dashboard import initialize_project, run_dashboard
 from .follow_up import ACTIONABLE_FILTER_STATUSES
 from .ingest import ingest_record
 from .notifications import (
     NotificationError,
-    actionable_rows,
     format_digest,
     send_pushplus_message,
     send_serverchan_message,
+)
+from .observation import (
+    export_hourly_csv,
+    export_scope_csv,
+    filter_recent_entries,
+    format_summary_text,
+    parse_log_entries,
+    summarize_by_day,
+    summarize_by_hour,
+    summarize_by_scope,
+    summarize_scope_by_day,
 )
 from .rate_limit import BudgetExceededError, CircuitOpenError, RequestGuard
 from .report import (
@@ -36,8 +51,10 @@ from .report import (
 from .sources.browser_manual import ManualQueryError, collect_manual_query
 from .sources.ccgp_jiangsu import SearchQuery
 from .sources.ccgp_jiangsu_detail import parse_detail_payload
-from .sources.okcis_jiangsu import JIANGSU_SOURCE
+from .sources.okcis_cities import CITY_SOURCES
+from .sources.okcis_jiangsu import JIANGSU_SOURCE, OkcisSourceConfig
 from .sources.okcis_taixing import OkcisListError, collect_list_pages
+from .sources.okcis_taizhou import TAIZHOU_SOURCES
 from .storage import TenderDatabase
 
 _FETCH_RETRY_DELAYS = (15.0, 30.0)
@@ -212,7 +229,13 @@ def _build_parser() -> argparse.ArgumentParser:
     serverchan_parser.add_argument("--db", default="data/tenders.sqlite3", help="数据库路径")
     serverchan_parser.add_argument(
         "--sendkey",
-        help="Server酱 Turbo SendKey；未提供时读取 SERVERCHAN_SENDKEY",
+        help="Server酱 Turbo/³ SendKey；未提供时读取 SERVERCHAN_SENDKEY",
+    )
+    serverchan_parser.add_argument(
+        "--channel-label",
+        default="serverchan",
+        help="发送账本渠道标识（默认 serverchan）；多个接收者各用一条 SendKey 时，"
+        "必须为每一路指定不同标识，避免相互去重吞掉推送",
     )
     serverchan_parser.add_argument(
         "--title",
@@ -292,7 +315,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pages",
         type=int,
         default=2,
-        help="本次最多采集页数（默认 2，按源站实际页数提前停止）",
+        help="本次最多采集页数（默认 2，按源站实际页数提前停止）；"
+        "scope=taizhou 时表示每个站点各采集的页数",
     )
     auto_parser.add_argument(
         "--page-size",
@@ -310,9 +334,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     auto_parser.add_argument(
         "--scope",
-        choices=("jiangsu", "taixing"),
-        default="jiangsu",
-        help="自动采集范围：jiangsu=江苏省级聚合入口（默认），taixing=仅泰兴",
+        choices=("jiangsu", "taixing", "taizhou", "cities13"),
+        default="taizhou",
+        help="自动采集范围：taizhou=泰州全域七站（默认），"
+        "cities13=江苏 13 个地级市 OKCIS 市级站，taixing=仅泰兴，"
+        "jiangsu=江苏省级聚合入口（调度已退役，仅供手动单跑对照）",
     )
     auto_parser.add_argument(
         "--snapshot-dir",
@@ -341,6 +367,53 @@ def _build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--limit", type=int, default=20, help="摘要和复核队列最多展示条数")
     auto_parser.add_argument("--lock-path", type=Path, help="自动采集锁文件路径")
 
+    analyze_log_parser = subparsers.add_parser(
+        "analyze-log",
+        help="分析 auto-refresh 运行日志，输出分天×小时采集汇总",
+    )
+    analyze_log_parser.add_argument(
+        "--log",
+        type=Path,
+        default=Path("data/auto-refresh.stdout.log"),
+        help="auto-refresh stdout 日志路径（默认 data/auto-refresh.stdout.log）",
+    )
+    analyze_log_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/observe-report.csv"),
+        help="小时级汇总 CSV 输出路径（默认 data/observe-report.csv）",
+    )
+    analyze_log_parser.add_argument(
+        "--by-scope-output",
+        type=Path,
+        default=Path("data/observe-by-scope.csv"),
+        help="按“来源×自然日”汇总的 CSV 输出路径（默认 data/observe-by-scope.csv）",
+    )
+    analyze_log_parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="只统计最近 N 天（默认 7）",
+    )
+
+    cleanup_parser = subparsers.add_parser(
+        "cleanup",
+        help="删除超过保留期的公告（级联删附件与通知账本）和快照 HTML（默认保留 7 天）",
+    )
+    cleanup_parser.add_argument("--db", default="data/tenders.sqlite3", help="数据库路径")
+    cleanup_parser.add_argument(
+        "--retention-days",
+        type=int,
+        default=7,
+        help="保留天数（默认 7，必须大于 0）",
+    )
+    cleanup_parser.add_argument(
+        "--snapshot-dir",
+        type=Path,
+        default=Path("data/raw/okcis-auto"),
+        help="快照 HTML 目录（默认 data/raw/okcis-auto）",
+    )
+
     ccgp_parser = subparsers.add_parser(
         "collect-ccgp-manual",
         help="人工输入验证码后低频采集江苏政府采购网列表",
@@ -363,9 +436,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command == "db-init":
         with TenderDatabase(args.db):
             pass
@@ -501,11 +574,14 @@ def main() -> None:
     if args.command in {"notify-serverchan", "notify-wechat"}:
         if args.limit <= 0:
             parser.error("--limit 必须大于 0")
+        channel_label = (args.channel_label or "").strip().lower()
+        if not channel_label:
+            parser.error("--channel-label 不能为空")
         sendkey = args.sendkey or os.environ.get("SERVERCHAN_SENDKEY")
         if not sendkey:
             parser.error("请提供 --sendkey 或设置 SERVERCHAN_SENDKEY")
         with TenderDatabase(args.db) as db:
-            rows = db.list_unnotified_actionable(channel="serverchan")[: args.limit]
+            rows = db.list_unnotified_actionable(channel=channel_label)[: args.limit]
         if not rows:
             print("没有新的命中目标，未发送通知")
             return
@@ -521,9 +597,9 @@ def main() -> None:
         with TenderDatabase(args.db) as db:
             marked = db.mark_notifications_sent(
                 (row["id"] for row in rows),
-                channel="serverchan",
+                channel=channel_label,
             )
-        print(f"Server酱摘要已发送，已记录 {marked} 条新命中")
+        print(f"Server酱摘要已发送（{channel_label}），已记录 {marked} 条新命中")
         return
     if args.command == "notify-pushplus":
         if args.limit <= 0:
@@ -534,8 +610,8 @@ def main() -> None:
         channel = args.channel or os.environ.get("PUSHPLUS_CHANNEL", "wechat")
         option = args.option or os.environ.get("PUSHPLUS_OPTION")
         with TenderDatabase(args.db) as db:
-            rows = db.list_tenders()
-        if not actionable_rows(rows):
+            rows = db.list_unnotified_actionable(channel="pushplus")[: args.limit]
+        if not rows:
             print("没有命中目标，未发送通知")
             return
         digest = format_digest(rows, max_items=args.limit)
@@ -549,7 +625,12 @@ def main() -> None:
             )
         except (NotificationError, ValueError) as exc:
             parser.error(str(exc))
-        print(f"PushPlus 摘要已发送（{channel}）")
+        with TenderDatabase(args.db) as db:
+            marked = db.mark_notifications_sent(
+                (row["id"] for row in rows),
+                channel="pushplus",
+            )
+        print(f"PushPlus 摘要已发送（{channel}），已记录 {marked} 条新命中")
         return
     if args.command == "collect-okcis":
         from .sources.okcis_taixing import OKCIS_RATE_LIMIT_POLICY
@@ -637,28 +718,74 @@ def main() -> None:
                     ),
                 )
 
-            source = JIANGSU_SOURCE if args.scope == "jiangsu" else None
-            source_name = source.name if source else "okcis_taixing"
+            source_name = "okcis_taixing"
+            source_url = "https://taixingshi.okcis.cn"
             try:
-                result = run_automatic_cycle(
-                    fetch_page,
-                    db_path=args.db,
-                    pages=args.pages,
-                    page_size=args.page_size,
-                    time_type=args.time_type,
-                    guard=guard,
-                    snapshot_dir=args.snapshot_dir,
-                    report_output=args.report_output,
-                    digest_output=args.digest_output,
-                    review_output=args.review_output,
-                    max_items=args.limit,
-                    lock_path=args.lock_path,
-                    base_url=source.base_url if source else "https://taixingshi.okcis.cn",
-                    source_name=source.name if source else "okcis_taixing",
-                    province=source.province if source else "江苏",
-                    city=source.city if source else "泰兴市",
-                    snapshot_prefix=source.snapshot_prefix if source else "okcis-taixing",
-                )
+                if args.scope in {"taizhou", "cities13"}:
+                    # 泰州全域七站 / 13 市级站共享 guard：预算按站数放宽，
+                    # 节流间隔不变；guard 由 run_okcis_cycle 内部构造。
+                    result = run_okcis_cycle(
+                        fetch_page,
+                        sources=TAIZHOU_SOURCES
+                        if args.scope == "taizhou"
+                        else CITY_SOURCES,
+                        db_path=args.db,
+                        pages=args.pages,
+                        page_size=args.page_size,
+                        time_type=args.time_type,
+                        snapshot_dir=args.snapshot_dir,
+                        report_output=args.report_output,
+                        digest_output=args.digest_output,
+                        review_output=args.review_output,
+                        max_items=args.limit,
+                        lock_path=args.lock_path,
+                    )
+                    source_name = (
+                        "okcis_taizhou" if args.scope == "taizhou" else "okcis_cities13"
+                    )
+                    source_url = (
+                        "https://taizhou.okcis.cn"
+                        if args.scope == "taizhou"
+                        else "https://nanjing.okcis.cn"
+                    )
+                else:
+                    # taixing 为兼容入口；jiangsu 已退出调度，仅供手动对照单跑。
+                    province_source: OkcisSourceConfig | None = (
+                        JIANGSU_SOURCE if args.scope == "jiangsu" else None
+                    )
+                    source_name = (
+                        province_source.name if province_source else "okcis_taixing"
+                    )
+                    source_url = (
+                        province_source.base_url
+                        if province_source
+                        else "https://taixingshi.okcis.cn"
+                    )
+                    result = run_automatic_cycle(
+                        fetch_page,
+                        db_path=args.db,
+                        pages=args.pages,
+                        page_size=args.page_size,
+                        time_type=args.time_type,
+                        guard=guard,
+                        snapshot_dir=args.snapshot_dir,
+                        report_output=args.report_output,
+                        digest_output=args.digest_output,
+                        review_output=args.review_output,
+                        max_items=args.limit,
+                        lock_path=args.lock_path,
+                        base_url=province_source.base_url
+                        if province_source
+                        else "https://taixingshi.okcis.cn",
+                        source_name=province_source.name
+                        if province_source
+                        else "okcis_taixing",
+                        province=province_source.province if province_source else "江苏",
+                        city=province_source.city if province_source else "泰兴市",
+                        snapshot_prefix=province_source.snapshot_prefix
+                        if province_source
+                        else "okcis-taixing",
+                    )
             except (
                 BudgetExceededError,
                 CircuitOpenError,
@@ -682,9 +809,31 @@ def main() -> None:
                     kind=attention_kind,
                     message=attention_message,
                     source=source_name,
-                    url=source.base_url if source else "https://taixingshi.okcis.cn",
+                    url=source_url,
                 )
                 parser.error(str(exc))
+        source_details = (
+            [
+                {
+                    "source": name,
+                    "records_seen": item.records_seen,
+                    "saved_count": item.saved_count,
+                    "pages_fetched": item.pages_fetched,
+                    "stopped_reason": item.stopped_reason,
+                }
+                for name, item in result.source_reports
+            ]
+            if result.source_reports
+            else [
+                {
+                    "source": source_name,
+                    "records_seen": result.collection.records_seen,
+                    "saved_count": result.collection.saved_count,
+                    "pages_fetched": result.collection.pages_fetched,
+                    "stopped_reason": result.collection.stopped_reason,
+                }
+            ]
+        )
         print(
             json.dumps(
                 {
@@ -695,12 +844,56 @@ def main() -> None:
                     "saved_count": result.collection.saved_count,
                     "status_counts": result.collection.status_counts,
                     "stopped_reason": result.collection.stopped_reason,
+                    "sources": source_details,
                     "reclassified": result.reclassified,
                     "review_queue_count": result.review_queue_count,
                     "report": str(result.report_path),
                     "digest": str(result.digest_path),
                     "review": str(result.review_path),
                     "finished_at": result.finished_at,
+                    "purged_tenders": result.purged_tenders,
+                    "purged_snapshots": result.purged_snapshots,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    if args.command == "analyze-log":
+        if args.days < 1:
+            parser.error("--days 必须大于 0")
+        if not args.log.exists():
+            parser.error(f"日志文件不存在：{args.log}（先运行 auto-refresh 产生日志）")
+        parse_report = parse_log_entries(
+            args.log.read_text(encoding="utf-8", errors="replace")
+        )
+        entries = filter_recent_entries(parse_report.entries, args.days)
+        hourly = summarize_by_hour(entries)
+        daily = summarize_by_day(entries)
+        scope_totals = summarize_by_scope(entries)
+        scope_daily = summarize_scope_by_day(entries)
+        output = export_hourly_csv(hourly, args.output)
+        scope_output = export_scope_csv(scope_daily, args.by_scope_output)
+        print(format_summary_text(hourly, daily, scope_totals))
+        print(
+            f"共解析 {len(parse_report.entries)} 条有效记录"
+            f"（静默跳过非 JSON 行 {parse_report.invalid_lines} 条、"
+            f"缺 finished_at 的行 {parse_report.missing_finished_at} 条），"
+            f"小时级汇总已写入：{output}，分来源日汇总已写入：{scope_output}"
+        )
+        return
+    if args.command == "cleanup":
+        if args.retention_days < 1:
+            parser.error("--retention-days 必须大于 0")
+        with TenderDatabase(args.db) as db:
+            purged_tenders = db.purge_tenders_older_than(args.retention_days)
+        purged_snapshots = purge_snapshot_files(args.snapshot_dir, args.retention_days)
+        print(
+            json.dumps(
+                {
+                    "retention_days": args.retention_days,
+                    "purged_tenders": purged_tenders,
+                    "purged_snapshots": purged_snapshots,
+                    "snapshot_dir": str(args.snapshot_dir),
                 },
                 ensure_ascii=False,
             )

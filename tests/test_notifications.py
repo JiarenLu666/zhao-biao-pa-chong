@@ -5,6 +5,7 @@ import httpx
 
 from tender_monitor.notifications import (
     NotificationError,
+    _serverchan_endpoint,
     actionable_rows,
     format_digest,
     send_pushplus_message,
@@ -204,3 +205,42 @@ def test_send_serverchan_message_raises_on_channel_error():
             assert "SCT-test-key" not in str(exc)
         else:
             raise AssertionError("expected NotificationError")
+
+
+def test_serverchan_endpoint_supports_turbo_and_sc3_sendkeys():
+    assert _serverchan_endpoint("SCT1234567890abcdef") == (
+        "https://sctapi.ftqq.com/SCT1234567890abcdef.send"
+    )
+    assert _serverchan_endpoint("sctp1379tSC3SAMPLEKEY") == (
+        "https://1379.push.ft07.com/send/sctp1379tSC3SAMPLEKEY.send"
+    )
+    try:
+        _serverchan_endpoint("not-a-sendkey")
+    except ValueError as exc:
+        assert "sctp" in str(exc)
+    else:
+        raise AssertionError("未知前缀的 SendKey 必须被拒绝")
+
+
+def test_send_serverchan_message_posts_to_sc3_endpoint_for_sctp_key():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"code": 0, "message": "发送成功"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        send_serverchan_message(
+            "江苏文化采购公告\n1. 视频拍摄服务",
+            "sctp1379tSC3SAMPLEKEY",
+            title="命中提醒",
+            client=client,
+        )
+
+    assert len(requests) == 1
+    assert requests[0].url.host == "1379.push.ft07.com"
+    assert requests[0].url.path == "/send/sctp1379tSC3SAMPLEKEY.send"
+    assert parse_qs(requests[0].read().decode()) == {
+        "title": ["命中提醒"],
+        "desp": ["江苏文化采购公告\n1. 视频拍摄服务"],
+    }

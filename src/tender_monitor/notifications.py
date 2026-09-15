@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -84,21 +85,31 @@ PUSHPLUS_API_URL = "https://www.pushplus.plus/send"
 
 SERVERCHAN_API_BASE = "https://sctapi.ftqq.com"
 
+_SERVERCHAN3_UID_RE = re.compile(r"^sctp(\d+)t", re.IGNORECASE)
+
 
 def _serverchan_endpoint(sendkey: str) -> str:
-    """构造 Server酱 Turbo 的发送端点。
+    """按 SendKey 前缀构造 Server酱 的发送端点。
 
-    本项目使用通过微信扫码获得的 Turbo SendKey（通常以 ``SCT`` 开头）。
-    SC3 的 SendKey 属于独立 App 通道，接口形状不同，故在这里明确拒绝，
-    避免把凭据拼到错误的端点上。
+    - Turbo：``SCT`` 开头（``SCTP`` 除外），端点为 ``sctapi.ftqq.com``。
+    - Server酱³：``sctp{uid}t...`` 开头，端点为 ``https://{uid}.push.ft07.com``。
+      两者都接受 POST form 的 ``title``/``desp`` 且以 ``code=0`` 表示成功，
+      因此发送函数无需区分版本。
     """
 
     normalized = sendkey.strip()
     if not normalized:
         raise ValueError("Server酱 SendKey 不能为空")
     upper = normalized.upper()
-    if not upper.startswith("SCT") or upper.startswith("SCTP"):
-        raise ValueError("当前仅支持 Server酱 Turbo SendKey（通常以 SCT 开头）")
+    if upper.startswith("SCTP"):
+        uid_match = _SERVERCHAN3_UID_RE.match(normalized)
+        if uid_match is None:
+            raise ValueError("Server酱³ SendKey 格式无法识别（应为 sctp{uid}t... 开头）")
+        return f"https://{uid_match.group(1)}.push.ft07.com/send/{normalized}.send"
+    if not upper.startswith("SCT"):
+        raise ValueError(
+            "当前仅支持 Server酱 Turbo（SCT 开头）或 Server酱³（sctp 开头）SendKey"
+        )
     return f"{SERVERCHAN_API_BASE}/{normalized}.send"
 
 
@@ -111,10 +122,12 @@ def send_serverchan_message(
     timeout_seconds: float = 15,
     endpoint: str | None = None,
 ) -> None:
-    """通过 Server酱 Turbo 发送一条文本消息到微信。
+    """通过 Server酱 Turbo 或 Server酱³ 发送一条文本消息。
 
+    SendKey 前缀决定端点：``SCT`` 开头走 Turbo（微信），
+    ``sctp`` 开头走 Server酱³（App）。
     ``client`` 和 ``endpoint`` 只用于测试或调用方复用 HTTP 会话；生产调用
-    默认使用官方 SCT 端点。SendKey 不会出现在异常信息中。
+    默认按前缀自动选择官方端点。SendKey 不会出现在异常信息中。
     """
 
     message = text.strip()

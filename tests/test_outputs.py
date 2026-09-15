@@ -227,3 +227,104 @@ def test_notify_serverchan_marks_rows_only_after_success(tmp_path, monkeypatch, 
 
     with TenderDatabase(db_path) as db:
         assert db.list_unnotified_actionable(channel="serverchan") == []
+
+
+def test_notify_pushplus_marks_rows_only_after_success(tmp_path, monkeypatch, capsys):
+    db_path = tmp_path / "tenders.sqlite3"
+    with TenderDatabase(db_path) as db:
+        ingest_record(db, make_record(url="https://example.invalid/pushplus"))
+
+    sent = {}
+
+    def fake_send(text, token, *, title, channel, option=None):
+        sent.update(text=text, token=token, title=title, channel=channel)
+
+    monkeypatch.setenv("PUSHPLUS_TOKEN", "test-token")
+    monkeypatch.setattr("tender_monitor.cli.send_pushplus_message", fake_send)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["tender-monitor", "notify-pushplus", "--db", str(db_path)],
+    )
+
+    main()
+    assert sent["token"] == "test-token"
+    assert "摄影设备采购项目" in sent["text"]
+    assert "已记录 1 条新命中" in capsys.readouterr().out
+
+    with TenderDatabase(db_path) as db:
+        assert db.list_unnotified_actionable(channel="pushplus") == []
+
+    # 已记账后再次运行不得重复推送。
+    def fail_send(*args, **kwargs):
+        raise AssertionError("已推送过的公告不应再次发送")
+
+    monkeypatch.setattr("tender_monitor.cli.send_pushplus_message", fail_send)
+    main()
+    assert "没有命中目标，未发送通知" in capsys.readouterr().out
+
+
+def test_notify_serverchan_channel_labels_keep_recipients_independent(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "tenders.sqlite3"
+    with TenderDatabase(db_path) as db:
+        ingest_record(db, make_record(url="https://example.invalid/two-recipients"))
+
+    calls = []
+
+    def fake_send(text, sendkey, *, title):
+        calls.append(sendkey)
+
+    monkeypatch.setattr("tender_monitor.cli.send_serverchan_message", fake_send)
+    monkeypatch.setenv("SERVERCHAN_SENDKEY", "SCT-self-key")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tender-monitor",
+            "notify-serverchan",
+            "--db",
+            str(db_path),
+            "--channel-label",
+            "serverchan-self",
+        ],
+    )
+    main()
+
+    monkeypatch.setenv("SERVERCHAN_SENDKEY", "SCT-peer-key")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tender-monitor",
+            "notify-serverchan",
+            "--db",
+            str(db_path),
+            "--channel-label",
+            "serverchan-peer",
+        ],
+    )
+    main()
+
+    assert calls == ["SCT-self-key", "SCT-peer-key"]
+    with TenderDatabase(db_path) as db:
+        assert db.list_unnotified_actionable(channel="serverchan-self") == []
+        assert db.list_unnotified_actionable(channel="serverchan-peer") == []
+
+
+def test_unnotified_queue_skips_snoozed_items_even_when_unverified(tmp_path):
+    db_path = tmp_path / "tenders.sqlite3"
+    with TenderDatabase(db_path) as db:
+        ingest_record(
+            db,
+            make_record(url="https://example.invalid/snoozed-unverified"),
+        )
+        db.update_follow_up(
+            "https://example.invalid/snoozed-unverified",
+            status="NOT_REQUIRED",
+            notes="暂不跟进",
+        )
+
+        assert db.list_unnotified_actionable(channel="serverchan") == []
+        assert db.list_unnotified_actionable(channel="pushplus") == []

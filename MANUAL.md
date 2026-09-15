@@ -111,7 +111,7 @@ py -3 -m venv .venv
 ```bash
 .venv/bin/python -m tender_monitor.cli setup --db data/tenders.sqlite3
 .venv/bin/python -m tender_monitor.cli auto-refresh \
-  --db data/tenders.sqlite3 --scope jiangsu
+  --db data/tenders.sqlite3 --scope taizhou
 ```
 
 如果需要迁移原电脑的历史数据，请通过 AirDrop、U 盘或受信任的私有文件传输复制 `tenders.sqlite3`，放到新电脑的 `data/` 或运行副本 `data/` 目录，再用同一数据库路径启动 Dashboard。不要把包含人工核验和跟进记录的实时数据库提交到公共 GitHub。
@@ -123,7 +123,7 @@ py -3 -m venv .venv
 ```bash
 .venv/bin/python -m tender_monitor.cli auto-refresh \
   --db data/tenders.sqlite3 \
-  --scope jiangsu \
+  --scope taizhou \
   --pages 2 \
   --page-size 50 \
   --time-type 1 \
@@ -133,13 +133,39 @@ py -3 -m venv .venv
   --review-output data/review.csv
 ```
 
-- `--scope jiangsu`：江苏省级 OKCIS 聚合入口。
+- `--scope taizhou`：泰州全域七站（默认；市级 taizhou.okcis.cn + 海陵 + 高港 + 泰兴 + 靖江 + 兴化 + 姜堰）。
+- `--scope cities13`：江苏 13 个地级市 OKCIS 市级站（南京、无锡、徐州、常州、苏州、南通、连云港、淮安、盐城、扬州、镇江、泰州、宿迁）。
 - `--scope taixing`：泰兴单点备用入口。
-- `--pages 2`：单次最多两页。
+- 江苏省级聚合入口（`jiangsu.okcis.cn`）的自动采集轮已退役，仅保留 `--scope jiangsu` 手动单跑对照入口。
+- `--pages 2`：单次每站最多两页。
 - `--page-size 50`：每页最多 50 条。
 - `--time-type 1`：站点的“最新”范围。
 
-自动任务每次最多 2 页/100 条；请求之间至少 15 秒并加 0–5 秒抖动。DNS、连接超时或 TLS/传输层瞬断会在不低于该间隔的前提下最多重试 2 次（等待 15 秒、30 秒）；401、429、`overLimitIP` 或“访问过于频繁”会熔断 1 小时，绝不重试。
+自动任务每站每次最多 2 页/100 条；请求之间至少 15 秒并加 0–5 秒抖动
+（`--scope taizhou` / `--scope cities13` 的多个站点共享同一请求闸门，
+节流间隔不变，仅按站数放宽单次运行的页数/记录数预算）。
+DNS、连接超时或 TLS/传输层瞬断会在不低于该间隔的前提下最多重试 2 次（等待 15 秒、30 秒）；401、429、`overLimitIP` 或“访问过于频繁”会熔断 1 小时，绝不重试。
+
+### 数据保留清理
+
+每轮自动采集结束时（以及 `cleanup` 子命令）会清理超过保留期的本地数据，
+默认保留 7 天：
+
+- 数据库中发布日（缺失时按入库日）早于保留期的公告会被删除；其附件记录
+  与通知发送账本依赖外键级联一并删除。
+- 快照目录（默认 `data/raw/okcis-auto`）中早于保留期的 HTML 文件会被删除。
+
+手动触发：
+
+```bash
+.venv/bin/python -m tender_monitor.cli cleanup \
+  --db data/tenders.sqlite3 \
+  --retention-days 7 \
+  --snapshot-dir data/raw/okcis-auto
+```
+
+自动轮的清理可通过给 `auto-refresh` 传 `retention_days`（编程接口）
+关闭；`cleanup` 子命令的 `--retention-days` 必须大于 0。
 
 输出文件：
 
@@ -187,10 +213,10 @@ rsync -a --exclude '.git' --exclude '.venv' --exclude 'data' \
 scripts/install-launchagent.sh
 ```
 
-安装脚本会根据当前用户名生成 LaunchAgent，安装到 `~/Library/LaunchAgents/` 并加载任务。计划时间为每天：
+安装脚本会根据当前用户名生成 LaunchAgent，安装到 `~/Library/LaunchAgents/` 并加载任务。调度频率为全天每 1 小时 1 轮（24 轮），每轮跑泰州全域 7 站各 1 次（省站轮已退役）：
 
 ```text
-08:00、10:00、12:00、14:00、16:00、18:00、20:00
+StartInterval = 3600（每小时触发一次）
 ```
 
 检查：
@@ -217,12 +243,14 @@ launchctl kickstart -k "gui/$(id -u)/com.jiangsu.tender-monitor.auto-refresh"
 
 ### Windows 任务计划程序
 
-- 创建每日任务，开始时间 08:00。
-- 高级设置为每 2 小时重复，持续 12 小时。
-- 程序：`.venv\Scripts\python.exe`。
-- 参数：`-m tender_monitor.cli auto-refresh --scope jiangsu --db data\tenders.sqlite3`。
-- 起始位置：项目目录。
-- 勾选“唤醒计算机运行”。
+需要一个任务（泰州全域轮）：
+
+- 每日任务，开始时间 08:00，高级设置为每 1 小时重复、持续 24 小时；
+  程序 `.venv\Scripts\python.exe`，参数
+  `-m tender_monitor.cli auto-refresh --scope taizhou --db data\tenders.sqlite3`。
+- “起始位置”设为项目目录，并勾选“唤醒计算机运行”。
+- 通知命令可挂在同一任务之后，或单独建第二个任务定时调用
+  `notify-serverchan` / `notify-pushplus`（发送账本自动去重，不会重复推送）。
 
 ### Linux cron
 
@@ -233,10 +261,17 @@ launchctl kickstart -k "gui/$(id -u)/com.jiangsu.tender-monitor.auto-refresh"
 ### 自动来源：江苏招标网 OKCIS
 
 ```text
-https://jiangsu.okcis.cn/sww/bn/
+https://taizhou.okcis.cn/sww/bn/        （泰州全域轮默认入口）
+https://jiangsu.okcis.cn/sww/bn/        （省级聚合入口，已退出调度，可 --scope jiangsu 手动单跑）
 ```
 
 这是聚合发现源，不是政府官方发布平台。自动任务只访问静态列表，不请求详情页。
+泰州全域七站已逐站实测；江苏 13 个地级市市级站（`--scope cities13`）沿用同一
+静态列表结构，已于 2026-09-15 低频逐站实测：13 个列表路径
+（`/sww/bn/1-50-1`）均返回 HTTP 200 且解析器兼容（南京站 total=221、5 页）。
+子域名以 `{城市拼音}.okcis.cn` 为主，淮安（`huaian.okcis.cn`）与宿迁
+（`suqianshi.okcis.cn`）为实测确认的特殊拼写。后续可用 `analyze-log`
+的分源命中数据决定裁撤个别来源。
 
 泰兴备用入口：
 
@@ -382,13 +417,15 @@ Dashboard 功能：
 
 遇到验证码、限流、DNS/网络错误或其他自动采集失败时写入 `data/attention.json`。Dashboard 会轮询事件并显示备用提示；程序同时尝试系统原生通知。同一未处理事件只通知一次；同一来源的网络/限流错误在后续采集成功后会自动标记已恢复并清除，验证码或人工操作提示仍需点击“标记已处理”。
 
-### Server酱 Turbo
+### Server酱 Turbo / Server酱³
 
 ```bash
 export SERVERCHAN_SENDKEY='你的 SendKey'
 .venv/bin/python -m tender_monitor.cli notify-serverchan \
   --db data/tenders.sqlite3
 ```
+
+SendKey 以 `SCT` 开头走 Server酱 Turbo（微信），以 `sctp` 开头走 Server酱³（App），端点自动识别。多名接收者各用一条 SendKey 时，每一路必须指定不同的 `--channel-label`（例如 `serverchan-self`、`serverchan-peer`），否则第一路发送记账后第二路会被账本去重跳过。
 
 ### PushPlus
 
@@ -426,7 +463,9 @@ export PUSHPLUS_CHANNEL='wechat'
 
 排除关键词包括工程、施工、建筑、监理、检测、实验室、维保、流标、废标、终止等。摄影、拍摄、图片、影像标题豁免宽泛的“设备采购”排除。
 
-OKCIS 默认至少 15 秒间隔 + 0–5 秒抖动，单次最多 2 页/100 条；DNS/超时/TLS 瞬断最多按 15 秒、30 秒退避重试 2 次，401、429、限流页进入 1 小时冷却且不重试；锁文件防止并行循环。
+OKCIS 默认至少 15 秒间隔 + 0–5 秒抖动，每站单次最多 2 页/100 条（泰州全域七站共享闸门，节流不变、预算按站数放宽）；DNS/超时/TLS 瞬断最多按 15 秒、30 秒退避重试 2 次，401、429、限流页进入 1 小时冷却且不重试；锁文件防止并行循环。
+
+泰州地区公告额外追加“拍照/照片/冲印”扩词命中（命中标注为“泰州扩词:词”）；不为泰州扩词配置排除词，避免误杀“电子信息采集拍照及冲印一寸照片比选”这类实证目标，扩词噪声由预算 UNKNOWN → 人工复核环节消化。
 
 ## 16. 常见问题
 
@@ -524,8 +563,9 @@ plutil -lint scripts/com.jiangsu.tender-monitor.auto-refresh.plist
 
 已验证能力：
 
-- OKCIS 江苏省级列表自动采集。
-- 每 2 小时 LaunchAgent 调度。
+- OKCIS 列表采集：泰州全域（市级+海陵+高港+泰兴+靖江+兴化+姜堰）与江苏 13 个地级市市级站（均已于 2026-09-15 低频实测）；省级/泰兴入口保留手动单跑。
+- 每 1 小时 LaunchAgent 调度（全天 24 轮，每轮泰州全域 7 站各 1 次；省站轮已退出调度）。
+- analyze-log 本地日志观察（分天×小时汇总 + 小时级 CSV）。
 - 低频、去重、熔断和锁文件。
 - 官方源可见浏览器人工验证码流程。
 - SQLite、报告、摘要和复核队列。

@@ -171,6 +171,9 @@ def test_auto_refresh_launch_agent_invokes_shell_explicitly():
         "/bin/sh",
         "__RUNTIME_DIR__/scripts/run-auto-refresh.sh",
     ]
+    # 全天每 1 小时触发一轮（24 轮）。
+    assert payload["StartInterval"] == 3600
+    assert "StartCalendarInterval" not in payload
 
 
 def test_dashboard_summary_separates_pending_and_verified_follow_up(tmp_path):

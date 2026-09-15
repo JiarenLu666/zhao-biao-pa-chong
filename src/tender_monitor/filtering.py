@@ -1,4 +1,11 @@
-"""面向摄影、文旅宣传和公共文化项目的保守筛选。"""
+"""面向摄影、文旅宣传和公共文化项目的保守筛选。
+
+泰州地区扩词决策（2026-09-15 指挥官拍板）：泰州地区记录额外追加
+（“拍照”、“照片”、“冲印”）三个包含词；**明确不加排除词**——
+实证目标“电子信息采集拍照及冲印一寸照片比选”含“信息采集”字样，
+若配“信息采集”排除词会误杀该目标。泰州扩词带来的噪声由
+预算 UNKNOWN → REVIEW 的人工复核环节消化。
+"""
 
 from __future__ import annotations
 
@@ -32,6 +39,16 @@ INCLUDE_GROUPS: dict[str, tuple[str, ...]] = {
         "活动策划",
     ),
 }
+
+#: 泰州地区专属扩词：仅在记录归属泰州地区时参与包含匹配。
+TAIZHOU_EXTRA_INCLUDE_TERMS = ("拍照", "照片", "冲印")
+
+#: 判定“泰州地区”的地名标记：city 或 province 含任一即视为泰州地区。
+#: 覆盖泰州市级站及全部 6 个区县子站（海陵、高港、泰兴、靖江、兴化、姜堰）。
+TAIZHOU_REGION_MARKERS = ("泰州", "海陵", "高港", "泰兴", "靖江", "兴化", "姜堰")
+
+#: 泰州扩词命中写入 include_matches 时使用的前缀标注。
+TAIZHOU_MATCH_PREFIX = "泰州扩词"
 
 EXCLUDE_TERMS = (
     "工程",
@@ -89,6 +106,13 @@ def _contains_generic_promotion(title: str, content: str) -> bool:
     return any(term in title or term in content for term in PROMOTION_SECONDARY)
 
 
+def _is_taizhou_region(record: TenderRecord) -> bool:
+    """判断记录是否归属泰州地区（city 或 province 含泰州相关地名）。"""
+
+    fields = (record.city or "", record.province or "")
+    return any(marker in field for marker in TAIZHOU_REGION_MARKERS for field in fields)
+
+
 def evaluate_record(record: TenderRecord) -> FilterDecision:
     """按标题+正文评分，并保留 UNKNOWN/超预算状态供人工筛选。"""
 
@@ -108,6 +132,16 @@ def evaluate_record(record: TenderRecord) -> FilterDecision:
                 score += 3 if in_title else 1
         if group == "摄影" and any(term in title for term in terms):
             score += 1
+
+    # 泰州地区扩词：与普通命中同分值（标题 3 分、正文 1 分），
+    # 命中词加“泰州扩词:”前缀标注，便于在报告里区分来源。
+    if _is_taizhou_region(record):
+        for term in TAIZHOU_EXTRA_INCLUDE_TERMS:
+            in_title = term in title
+            in_content = term in content
+            if in_title or in_content:
+                include_matches.append(f"{TAIZHOU_MATCH_PREFIX}:{term}")
+                score += 3 if in_title else 1
 
     # “工程”在代理机构名称中极常见，正文命中不能单独作为排除依据；
     # 其他排除词仍可在正文中保守识别。

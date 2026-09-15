@@ -35,14 +35,14 @@ tender-monitor collect-okcis --db data/tenders.sqlite3 --pages 1 \
   --time-type 1 --snapshot-dir data/raw/okcis-taixing
 ```
 
-省级自动循环：
+泰州全域自动循环：
 
 ```bash
-tender-monitor auto-refresh --scope jiangsu --db data/tenders.sqlite3
+tender-monitor auto-refresh --scope taizhou --db data/tenders.sqlite3
 ```
 
 命令只请求列表页，不请求带算术验证码的详情页。默认请求间隔为 15 秒并加入
-0–5 秒抖动，每次最多 2 页/100 条；返回 401、429 或限流提示会立即熔断，
+0–5 秒抖动，每站每次最多 2 页/100 条；返回 401、429 或限流提示会立即熔断，
 不会自动重试。列表项的无标签金额只保存在 `budget_raw`，`budget_status` 保持
 `UNKNOWN`，因此目标关键词命中后会进入 `REVIEW`，需人工回到官方源核验。
 
@@ -83,13 +83,23 @@ Dashboard 的项目详情支持四种跟进状态：PENDING（待跟进）、IN_
 
 ## 低频自动循环
 
-自动循环入口为 `tender-monitor auto-refresh`，默认访问不需要验证码的
-`jiangsu.okcis.cn` 省级聚合入口，覆盖该入口收录的江苏各地公开列表；
-`--scope taixing` 可退回旧的泰兴单点入口。江苏政府采购网仍由
-`collect-ccgp-manual` 负责人工验证码流程。每次循环最多 2 页，但会按源站实际页数提前停止，
-只有确实存在第 2 页时才请求；单次最多 2 页/100 条，请求间隔 15 秒并加入 0–5 秒抖动；
-401、429 或限流提示会立即熔断。循环结束后自动重分类并生成报告、摘要和人工复核队列，
+自动循环入口为 `tender-monitor auto-refresh`，默认采集泰州全域
+七个 OKCIS 子站（市级 `taizhou.okcis.cn` + 海陵 + 高港 + 泰兴 + 靖江 + 兴化 + 姜堰）；
+`--scope cities13` 可扩到江苏 13 个地级市市级站（南京 → 宿迁，均已于 2026-09-15
+低频实测，列表路径均返回 HTTP 200 且解析器兼容）；
+`--scope taixing` 可退回旧的泰兴单点入口。江苏省级聚合入口（`jiangsu.okcis.cn`）
+已退出自动调度，`--scope jiangsu` 仅保留为手动单跑对照入口。多站共享同一 RequestGuard：
+节流间隔保持 15 秒 + 0–5 秒抖动不变，单次运行的
+页数/记录数预算按站数动态放宽。江苏政府采购网仍由
+`collect-ccgp-manual` 负责人工验证码流程。每站每次最多 2 页，但会按源站实际页数提前停止，
+只有确实存在下一页时才请求；任一站返回 401、429 或限流提示都会立即停止整轮并熔断。
+循环结束后自动重分类并生成报告、摘要和人工复核队列，
 SQLite 的项目编号/标题日期去重保证重复调度不会堆积重复记录。
+
+数据保留：每轮结束时自动清理超过保留期（默认 7 天）的旧公告——附件记录与
+通知发送账本依赖外键级联一并删除——以及快照目录中超过保留期的 HTML 文件；
+也可用 `tender-monitor cleanup --db data/tenders.sqlite3 --retention-days 7`
+手动触发，输出 JSON 汇总（`purged_tenders` / `purged_snapshots`）。
 
 若设置 `SERVERCHAN_SENDKEY`，调度脚本会在采集完成后仅推送尚未发送过的新命中；
 发送成功的公告记录在 `notification_deliveries` 表，失败则不记账，下一次会安全重试。
@@ -100,6 +110,13 @@ SQLite 的项目编号/标题日期去重保证重复调度不会堆积重复记
 
 macOS/Linux 可直接调度 scripts/run-auto-refresh.sh；Windows 任务计划程序则调用 .venv\Scripts\tender-monitor.exe auto-refresh，并把“起始位置”设为项目目录。
 
-建议交给操作系统调度器每天 08:00 到 20:00 每 2 小时运行一次；不要使用常驻死循环，也不要为了追求实时性缩短站点请求间隔。
+调度频率为全天每 1 小时 1 轮（24 轮）：每轮跑泰州全域 7 站各 1 次
+（省站轮已退役）。泰州市级站为全域聚合站，每小时 1 页（50 条）即可覆盖，
+无需调大 `--pages`。
+Windows 任务计划同样配置为每小时触发一次。不要使用常驻死循环，也不要为了追求实时性缩短站点请求间隔。
+
+采集观察：`tender-monitor analyze-log` 读取 `data/auto-refresh.stdout.log`
+（每轮一行 JSON），按中国时区分天×小时汇总轮数与入库量，并把小时级明细写入
+`data/observe-report.csv`；`--days` 控制只统计最近 N 天。
 
 macOS 的静默 launchd 配置见 `scripts/com.jiangsu.tender-monitor.auto-refresh.plist`；带通知占位值的 `.plist.example` 只用于参考。安装前请确认项目绝对路径和日志目录。

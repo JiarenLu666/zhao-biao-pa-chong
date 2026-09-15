@@ -8,14 +8,14 @@
 
 ## 第一版边界
 
-- 自动来源：OKCIS 江苏省级聚合入口（可用 `--scope taixing` 退回泰兴单点）只采集静态列表元数据；详情有算术验证码，必须回到官方源核验，不作为权威预算来源。
+- 自动来源：OKCIS 地市站（默认泰州全域七站；`--scope cities13` 扩到江苏 13 个地级市市级站；`--scope taixing` 退回泰兴单点）只采集静态列表元数据；详情有算术验证码，必须回到官方源核验，不作为权威预算来源。
 - 官方核验源：江苏政府采购网（`ccgp-jiangsu`）检索页、公开列表接口和可见浏览器人工验证码流程。
 - 公告分类：官方列表接口使用 `cglx`，详情链接使用 `gglb`；分类清单以实测页面为准。
 - 苏采云：目前只登记公开可见的列表/详情元数据，不绕过登录、CA 或附件权限。
 - 当前限制：官方列表接口要求验证码；同一查询会话可用一个验证码翻页，但不能无人值守直连。自动任务只使用无需验证码的 OKCIS 列表。
 - 访问保护：自动源默认每次请求间隔 15 秒并加入 0–5 秒抖动，单次最多 2 页/100 条。DNS、超时或 TLS 瞬断会按 15 秒、30 秒退避最多重试 2 次；遇到 401、429 或 `overLimitIP`/“访问过于频繁”后立即熔断，冷却 1 小时且不重试。
-- 存储：SQLite；原始 HTML 和附件放在本地 `data/` 目录。
-- 推送：支持免费 Server酱 Turbo 微信通知，并保留 PushPlus 兼容命令；未配置凭据时仍只生成本地报告。
+- 存储：SQLite；原始 HTML 和附件放在本地 `data/` 目录。超过保留期（默认 7 天）的公告（级联删附件与通知账本）和快照 HTML 会在每轮采集后自动清理，也可用 `cleanup` 子命令手动触发。
+- 推送：支持免费 Server酱 Turbo 微信与 Server酱³ App 通知（按 SendKey 前缀自动识别），并保留 PushPlus 兼容命令；未配置凭据时仍只生成本地报告。
 
 ## 目录
 
@@ -149,6 +149,16 @@ tender-monitor notify-serverchan --db data/tenders.sqlite3
 程序只在存在 `MATCH`、`OVER_BUDGET` 或 `REVIEW` 候选时发送；没有命中目标，或该公告
 已经通过 Server酱发送过时，不会重复提醒。发送成功后会把公告 ID 写入 SQLite 的
 `notification_deliveries` 表；因此重复调度、重复抓取或重新分类都不会重复推送。
+PushPlus 命令使用同一套账本（渠道标识 `pushplus`），同样不会重复推送。
+
+**Server酱³（App 推送）**：`sctp` 开头的 SendKey 会自动走 Server酱³ 端点，
+无需额外配置。**多接收者**：如果多名接收者各持一条 SendKey 分别执行本命令，
+必须为每一路指定不同的 `--channel-label`，否则第一路发送记账后第二路会被去重跳过：
+
+```bash
+tender-monitor notify-serverchan --sendkey 'SCT...' --channel-label serverchan-self
+tender-monitor notify-serverchan --sendkey 'sctp...' --channel-label serverchan-peer
+```
 
 `scripts/run-auto-refresh.sh` 会优先使用 `SERVERCHAN_SENDKEY` 发送新的命中摘要；未设置时
 不会发送网络通知。通知失败会让调度脚本返回非零，便于调度器发现问题。原有 PushPlus
@@ -173,17 +183,20 @@ Dashboard 默认只监听本机；本机模式可以在公告详情里编辑人�
 
 ## 低频自动采集
 
-自动循环默认使用不需要验证码的 OKCIS 江苏省级聚合入口（`jiangsu.okcis.cn`），
-读取其收录的江苏各地公开列表；官方江苏政府采购网仍需人工验证码，不会被后台任务强行调用。
-一次循环会采集最新列表、按项目编号或标题/日期去重、刷新 CSV/摘要/复核队列，并写入原始 HTML 快照。
+自动循环默认使用不需要验证码的 OKCIS 泰州全域七站
+（市级 `taizhou.okcis.cn` + 海陵 + 高港 + 泰兴 + 靖江 + 兴化 + 姜堰），
+`--scope cities13` 可扩到江苏 13 个地级市市级站；官方江苏政府采购网仍需人工验证码，
+不会被后台任务强行调用。一次循环会采集最新列表、按项目编号或标题/日期去重、
+刷新 CSV/摘要/复核队列，并写入原始 HTML 快照；江苏省级聚合入口（`jiangsu.okcis.cn`）
+已退出自动调度，`--scope jiangsu` 仅保留为手动单跑对照入口。
 
 运行命令：
 
-    tender-monitor auto-refresh --db data/tenders.sqlite3 --scope jiangsu
+    tender-monitor auto-refresh --db data/tenders.sqlite3 --scope taizhou
 
 在 macOS/Linux 上也可以直接把 scripts/run-auto-refresh.sh 交给调度器，它会自动定位项目目录并写入 data 下的报告文件。
 
-`--scope taixing` 可退回旧的泰兴单点入口。默认每次最多采集 2 页，但会按源站返回的实际页数提前停止；因此只有确实存在第 2 页时才会发出第 2 个请求。程序内置每次请求至少间隔 15 秒并加入 0–5 秒抖动，单次最多 2 页/100 条；DNS、超时或 TLS 瞬断会按 15 秒、30 秒退避最多重试 2 次，检测到 401、429 或“访问过于频繁”则立即熔断且不重试。锁文件会防止两个调度任务同时运行。
+`--scope taixing` 可退回旧的泰兴单点入口。默认每站每次最多采集 2 页，但会按源站返回的实际页数提前停止；因此只有确实存在第 2 页时才会发出第 2 个请求。程序内置每次请求至少间隔 15 秒并加入 0–5 秒抖动，每站单次最多 2 页/100 条（多站共享同一请求闸门，节流间隔不变、预算按站数放宽）；DNS、超时或 TLS 瞬断会按 15 秒、30 秒退避最多重试 2 次，检测到 401、429 或“访问过于频繁”则立即熔断且不重试。锁文件会防止两个调度任务同时运行。每轮结束时会自动清理超过 7 天的旧公告（级联删附件与通知账本）和快照 HTML，也可随时运行 `tender-monitor cleanup --db data/tenders.sqlite3` 手动触发。
 
 建议使用 macOS launchd、Windows 任务计划程序或 Linux cron，在每天 08:00 到 20:00 之间每 2 小时触发一次上述命令。调度器只负责启动进程，进程完成采集和本地输出后自动退出。
 

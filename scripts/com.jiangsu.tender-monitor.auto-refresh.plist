@@ -10,16 +10,8 @@
     <string>/bin/sh</string>
     <string>__RUNTIME_DIR__/scripts/run-auto-refresh.sh</string>
   </array>
-  <key>StartCalendarInterval</key>
-  <array>
-    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
-  </array>
+  <key>StartInterval</key>
+  <integer>3600</integer>
   <key>StandardOutPath</key>
   <string>__RUNTIME_DIR__/data/auto-refresh.stdout.log</string>
   <key>StandardErrorPath</key>

@@ -16,51 +16,9 @@
     <key>SERVERCHAN_SENDKEY</key>
     <string>SCT-REPLACE-ME</string>
   </dict>
-  <key>StartCalendarInterval</key>
-  <array>
-    <dict>
-      <key>Hour</key>
-      <integer>8</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>10</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>12</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>14</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>16</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>18</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>20</integer>
-      <key>Minute</key>
-      <integer>0</integer>
-    </dict>
-  </array>
+  <!-- 全天每 1 小时触发一轮（3600 秒）。 -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
   <key>StandardOutPath</key>
   <string>__RUNTIME_DIR__/data/auto-refresh.stdout.log</string>
   <key>StandardErrorPath</key>
